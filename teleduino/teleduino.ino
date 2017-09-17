@@ -93,6 +93,19 @@ bool teleinfo__read()
 }
 
 void setup() {
+    // immediately disable watchdog timer so set will not get interrupted
+
+    wdt_disable();
+
+    // I often do serial i/o at startup to allow the user to make config changes of
+    // various constants. This is often using fgets which will wait for user input.
+    // any such 'slow' activity needs to be completed before enabling the watchdog timer.
+
+    // the following forces a pause before enabling WDT. This gives the IDE a chance to
+    // call the bootloader in case something dumb happens during development and the WDT
+    // resets the MCU too quickly. Once the code is solid, remove this.
+
+    delay(2L * 1000L);
 
     BlinkM_beginWithPower();  
     BlinkM_stopScript( blinkm_addr ); 
@@ -100,13 +113,32 @@ void setup() {
     
     ether.begin(sizeof Ethernet::buffer, mac, 10);
     ether.staticSetup(ip, gw, gw, subnet);
-    ether.dhcpSetup();
+
+    if(!ether.dhcpSetup())
+    {
+       wdt_enable(WDTO_8S);
+       wdt_reset();
+       BlinkM_playScript( blinkm_addr, 3, 0, 0 );
+       // Blink Red until wdt reboot the controller 
+       while(true){}
+    }
+
+    // enable the watchdog timer. There are a finite number of timeouts allowed (see wdt.h).
+    // Notes I have seen say it is unwise to go below 250ms as you may get the WDT stuck in a
+    // loop rebooting.
+    // The timeouts I'm most likely to use are:
+    // WDTO_1S
+    // WDTO_2S
+    // WDTO_4S
+    // WDTO_8S
+    wdt_enable(WDTO_8S);
   
     // wait until arp request to gateway is finished
     while (ether.clientWaitingGw())
       ether.packetLoop(ether.packetReceive());
 
     BlinkM_setRGB(blinkm_addr, 0x00, 0x10, 0x00); // Green
+    wdt_reset();
 }
 
 char payload[teleinfo__buffer_size] = "";
@@ -131,5 +163,11 @@ void loop() {
         payload[0] = 0;
         strcpy(payload, teleinfo__buffer);
         ether.sendUdp(payload, sizeof(payload), 1234, remote, 3425);
+        
+        wdt_disable();
+        delay(10);
+        wdt_enable(WDTO_8S);
     }
+
+    wdt_reset();
 }
